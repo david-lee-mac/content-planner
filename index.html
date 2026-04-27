@@ -703,19 +703,21 @@ function savePost(e){
 async function uploadThumbToDrive(postId,base64){
   if(!sheetUrl)return null;
   try{
-    const resized=await resizeImage(base64,600);
+    const resized=await resizeImage(base64,300);
+    // Send thumbnail to Apps Script — it saves to Drive AND stores URL in Thumbnails sheet
     await fetch(sheetUrl,{
       method:'POST',
       mode:'no-cors',
       body:JSON.stringify({action:'uploadThumb',postId:postId,base64:resized})
     });
-    // Wait for Drive to process, then pull the URL
-    await new Promise(r=>setTimeout(r,3000));
+    // Wait for Apps Script to process (Drive upload + sheet write)
+    await new Promise(r=>setTimeout(r,4000));
+    // Pull fresh data — the thumbnail URL will now be in the posts
     const check=await fetch(sheetUrl);
     const data=await check.json();
     if(data.posts){
       const match=data.posts.find(p=>p.id===postId);
-      if(match&&match.thumbnail)return match.thumbnail;
+      if(match&&match.thumbnail&&!match.thumbnail.startsWith('data:'))return match.thumbnail;
     }
     return null;
   }catch(err){console.warn('uploadThumbToDrive error:',err);return null}
@@ -732,7 +734,7 @@ function resizeImage(base64,maxSize){
       }
       const c=document.createElement('canvas');c.width=w;c.height=h;
       c.getContext('2d').drawImage(img,0,0,w,h);
-      resolve(c.toDataURL('image/jpeg',0.7));
+      resolve(c.toDataURL('image/jpeg',0.5));
     };
     img.src=base64;
   });
