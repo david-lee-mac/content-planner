@@ -418,14 +418,19 @@ async function syncPush(){
   if(!sheetUrl||isSyncing)return;
   isSyncing=true;setSyncStatus('Pushing...', false);
   try{
-    // Strip thumbnails (too large for sheet cells)
-    const cleanPosts=posts.map(p=>{const c={...p};delete c.thumbnail;return c});
-    const res=await fetch(sheetUrl,{
+    // Strip base64 thumbnails (too large), keep Drive URLs
+    const cleanPosts=posts.map(p=>{const c={...p};if(c.thumbnail&&c.thumbnail.startsWith('data:'))c.thumbnail='';return c});
+    // Use no-cors to avoid CORS/redirect issues with Google Apps Script
+    await fetch(sheetUrl,{
       method:'POST',
-      headers:{'Content-Type':'text/plain'},
+      mode:'no-cors',
+      redirect:'follow',
       body:JSON.stringify({posts:cleanPosts,config})
     });
-    const data=await res.json();
+    // no-cors gives opaque response, so verify with a quick GET
+    await new Promise(r=>setTimeout(r,1000));
+    const check=await fetch(sheetUrl);
+    const data=await check.json();
     if(data.error)throw new Error(data.error);
     const now=new Date();
     setSyncStatus(`Pushed ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`, false);
@@ -669,12 +674,63 @@ function openModal(id){
 }
 function closeModal(){document.getElementById('modalOverlay').classList.remove('active')}
 
-function savePost(e){
+async function savePost(e){
   e.preventDefault();
   const id=document.getElementById('postId').value||('p_'+Date.now()+'_'+Math.random().toString(36).substr(2,5));
-  const pd={id,channel:document.getElementById('postChannel').value,type:document.getElementById('postType').value,pillar:document.getElementById('postPillar').value,status:document.getElementById('postStatus').value,usp:document.getElementById('postUSP').value,date:document.getElementById('postDate').value,time:document.getElementById('postTime').value,caption:document.getElementById('postCaption').value,remarks:document.getElementById('postRemarks').value,refLink:document.getElementById('postRefLink').value,editedLink:document.getElementById('postEditedLink').value,thumbnail:currentThumb,checklist:modalChecklist,comments:modalComments};
+
+  // If thumbnail is a new base64 (local upload), upload to Drive first
+  let thumbUrl=currentThumb;
+  if(currentThumb&&currentThumb.startsWith('data:')&&sheetUrl){
+    showToast('Uploading thumbnail...');
+    try{
+      const uploaded=await uploadThumbToDrive(id,currentThumb);
+      if(uploaded)thumbUrl=uploaded;
+    }catch(err){console.warn('Thumb upload failed:',err)}
+  }
+
+  const pd={id,channel:document.getElementById('postChannel').value,type:document.getElementById('postType').value,pillar:document.getElementById('postPillar').value,status:document.getElementById('postStatus').value,usp:document.getElementById('postUSP').value,date:document.getElementById('postDate').value,time:document.getElementById('postTime').value,caption:document.getElementById('postCaption').value,remarks:document.getElementById('postRemarks').value,refLink:document.getElementById('postRefLink').value,editedLink:document.getElementById('postEditedLink').value,thumbnail:thumbUrl,checklist:modalChecklist,comments:modalComments};
   const idx=posts.findIndex(p=>p.id===id);if(idx>=0)posts[idx]=pd;else posts.push(pd);
   saveToStorage();renderAll();closeModal();autoPush();
+}
+
+async function uploadThumbToDrive(postId,base64){
+  if(!sheetUrl)return null;
+  try{
+    // Resize image before uploading (max 600px, keeps file small)
+    const resized=await resizeImage(base64,600);
+    const res=await fetch(sheetUrl,{
+      method:'POST',
+      mode:'no-cors',
+      body:JSON.stringify({action:'uploadThumb',postId:postId,base64:resized})
+    });
+    // no-cors = opaque response, so wait then pull to get the URL
+    await new Promise(r=>setTimeout(r,2000));
+    // Fetch fresh data to get the thumbnail URL back
+    const check=await fetch(sheetUrl);
+    const data=await check.json();
+    if(data.posts){
+      const match=data.posts.find(p=>p.id===postId);
+      if(match&&match.thumbnail)return match.thumbnail;
+    }
+    return null;
+  }catch(err){console.warn('uploadThumbToDrive error:',err);return null}
+}
+
+function resizeImage(base64,maxSize){
+  return new Promise(resolve=>{
+    const img=new Image();
+    img.onload=()=>{
+      let w=img.width,h=img.height;
+      if(w>maxSize||h>maxSize){
+        if(w>h){h=Math.round(h*(maxSize/w));w=maxSize}
+        else{w=Math.round(w*(maxSize/h));h=maxSize}
+      }
+      const c=document.createElement('canvas');c.width=w;c.height=h;
+      c.getContext('2d').drawImage(img,0,0,w,h);
+      resolve(c.toDataURL('image/jpeg',0.7));
+    };
+    img.src=base64;
+  });
 }
 function deletePost(){const id=document.getElementById('postId').value;if(id&&confirm('Delete this post?')){posts=posts.filter(p=>p.id!==id);saveToStorage();renderAll();closeModal();autoPush()}}
 
