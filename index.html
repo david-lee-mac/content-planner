@@ -394,19 +394,10 @@ async function syncPull(){
     const data=await res.json();
     if(data.error)throw new Error(data.error);
     if(data.posts){
-      // Merge thumbnails: prefer Drive URL from sheet, fall back to local base64
+      // Use thumbnail from sheet (compressed base64), fall back to local
       const localThumbs={};
       posts.forEach(p=>{if(p.thumbnail)localThumbs[p.id]=p.thumbnail});
-      posts=data.posts.map(p=>{
-        const sheetThumb=p.thumbnail||'';
-        const localThumb=localThumbs[p.id]||'';
-        // Prefer Drive URL (starts with http), then local
-        let thumb=null;
-        if(sheetThumb&&sheetThumb.startsWith('http'))thumb=sheetThumb;
-        else if(localThumb)thumb=localThumb;
-        else if(sheetThumb)thumb=sheetThumb;
-        return{...p,thumbnail:thumb};
-      });
+      posts=data.posts.map(p=>({...p,thumbnail:p.thumbnail||localThumbs[p.id]||null}));
     }
     if(data.config){
       config=data.config;
@@ -427,8 +418,14 @@ async function syncPush(){
   if(!sheetUrl||isSyncing)return;
   isSyncing=true;setSyncStatus('Pushing...', false);
   try{
-    // Strip base64 thumbnails (too large), keep Drive URLs
-    const cleanPosts=posts.map(p=>{const c={...p};if(c.thumbnail&&c.thumbnail.startsWith('data:'))c.thumbnail='';return c});
+    // Compress thumbnails to tiny previews that fit in sheet cells (< 50K chars)
+    const cleanPosts=await Promise.all(posts.map(async p=>{
+      const c={...p};
+      if(c.thumbnail&&c.thumbnail.startsWith('data:')&&c.thumbnail.length>40000){
+        c.thumbnail=await resizeImage(c.thumbnail,150);
+      }
+      return c;
+    }));
     // Use no-cors to avoid CORS/redirect issues with Google Apps Script
     await fetch(sheetUrl,{
       method:'POST',
@@ -686,50 +683,9 @@ function closeModal(){document.getElementById('modalOverlay').classList.remove('
 function savePost(e){
   e.preventDefault();
   const id=document.getElementById('postId').value||('p_'+Date.now()+'_'+Math.random().toString(36).substr(2,5));
-  const hasNewThumb=currentThumb&&currentThumb.startsWith('data:')&&sheetUrl;
-
-  // Save immediately with local thumbnail — modal closes instantly
   const pd={id,channel:document.getElementById('postChannel').value,type:document.getElementById('postType').value,pillar:document.getElementById('postPillar').value,status:document.getElementById('postStatus').value,usp:document.getElementById('postUSP').value,date:document.getElementById('postDate').value,time:document.getElementById('postTime').value,caption:document.getElementById('postCaption').value,remarks:document.getElementById('postRemarks').value,refLink:document.getElementById('postRefLink').value,editedLink:document.getElementById('postEditedLink').value,thumbnail:currentThumb,checklist:modalChecklist,comments:modalComments};
   const idx=posts.findIndex(p=>p.id===id);if(idx>=0)posts[idx]=pd;else posts.push(pd);
-  saveToStorage();renderAll();closeModal();
-
-  // Upload thumbnail to Drive in background, then push
-  if(hasNewThumb){
-    showToast('Uploading thumbnail...');
-    uploadThumbToDrive(id,currentThumb).then(url=>{
-      if(url){
-        const post=posts.find(p=>p.id===id);
-        if(post){post.thumbnail=url;saveToStorage();renderAll()}
-        showToast('Thumbnail uploaded');
-      }
-      autoPush();
-    });
-  }else{
-    autoPush();
-  }
-}
-
-async function uploadThumbToDrive(postId,base64){
-  if(!sheetUrl)return null;
-  try{
-    const resized=await resizeImage(base64,300);
-    // Send thumbnail to Apps Script — it saves to Drive AND stores URL in Thumbnails sheet
-    await fetch(sheetUrl,{
-      method:'POST',
-      mode:'no-cors',
-      body:JSON.stringify({action:'uploadThumb',postId:postId,base64:resized})
-    });
-    // Wait for Apps Script to process (Drive upload + sheet write)
-    await new Promise(r=>setTimeout(r,4000));
-    // Pull fresh data — the thumbnail URL will now be in the posts
-    const check=await fetch(sheetUrl);
-    const data=await check.json();
-    if(data.posts){
-      const match=data.posts.find(p=>p.id===postId);
-      if(match&&match.thumbnail&&!match.thumbnail.startsWith('data:'))return match.thumbnail;
-    }
-    return null;
-  }catch(err){console.warn('uploadThumbToDrive error:',err);return null}
+  saveToStorage();renderAll();closeModal();autoPush();
 }
 
 function resizeImage(base64,maxSize){
@@ -743,7 +699,7 @@ function resizeImage(base64,maxSize){
       }
       const c=document.createElement('canvas');c.width=w;c.height=h;
       c.getContext('2d').drawImage(img,0,0,w,h);
-      resolve(c.toDataURL('image/jpeg',0.5));
+      resolve(c.toDataURL('image/jpeg',0.4));
     };
     img.src=base64;
   });
