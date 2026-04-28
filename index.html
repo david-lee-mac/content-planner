@@ -394,10 +394,19 @@ async function syncPull(){
     const data=await res.json();
     if(data.error)throw new Error(data.error);
     if(data.posts){
-      // Merge: keep local thumbnails (not stored in sheet)
-      const thumbMap={};
-      posts.forEach(p=>{if(p.thumbnail)thumbMap[p.id]=p.thumbnail});
-      posts=data.posts.map(p=>({...p,thumbnail:thumbMap[p.id]||p.thumbnail||null}));
+      // Merge thumbnails: prefer Drive URL from sheet, fall back to local base64
+      const localThumbs={};
+      posts.forEach(p=>{if(p.thumbnail)localThumbs[p.id]=p.thumbnail});
+      posts=data.posts.map(p=>{
+        const sheetThumb=p.thumbnail||'';
+        const localThumb=localThumbs[p.id]||'';
+        // Prefer Drive URL (starts with http), then local
+        let thumb=null;
+        if(sheetThumb&&sheetThumb.startsWith('http'))thumb=sheetThumb;
+        else if(localThumb)thumb=localThumb;
+        else if(sheetThumb)thumb=sheetThumb;
+        return{...p,thumbnail:thumb};
+      });
     }
     if(data.config){
       config=data.config;
