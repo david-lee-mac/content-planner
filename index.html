@@ -422,7 +422,7 @@ async function syncPush(){
     const cleanPosts=await Promise.all(posts.map(async p=>{
       const c={...p};
       if(c.thumbnail&&c.thumbnail.startsWith('data:')&&c.thumbnail.length>40000){
-        c.thumbnail=await resizeImage(c.thumbnail,150);
+        c.thumbnail=await resizeImage(c.thumbnail,300);
       }
       return c;
     }));
