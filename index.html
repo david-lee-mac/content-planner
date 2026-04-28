@@ -19,8 +19,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .btn-sm{padding:6px 12px;font-size:12px}
 .btn-danger{background:#ff7675;color:#fff}.btn-danger:hover{background:#d63031}
 .btn-icon{background:none;border:none;cursor:pointer;font-size:18px;padding:4px 8px;border-radius:6px;transition:background .2s}.btn-icon:hover{background:var(--bg)}
-.btn-sync{background:#00b894;color:#fff;border:none}.btn-sync:hover{background:#00a884}
-.btn-sync.syncing{animation:pulse-sync 1s infinite;opacity:.7;pointer-events:none}
+.btn-sync{background:#00b894;color:#fff;border:none;cursor:pointer;position:relative}.btn-sync:hover{background:#00a884;transform:scale(1.03)}
+.btn-sync.syncing{animation:pulse-sync 1s infinite;opacity:.7;cursor:wait}
 @keyframes pulse-sync{0%,100%{opacity:.7}50%{opacity:.4}}
 .sync-status{font-size:11px;color:var(--text-muted);max-width:140px;text-align:right;line-height:1.3}
 
@@ -63,6 +63,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .grid-card .status-bar{height:6px;width:100%;flex-shrink:0}
 .grid-card-empty{border:2px dashed #ccc;display:flex;align-items:center;justify-content:center;min-height:200px;background:0 0;cursor:pointer;border-radius:6px}
 .grid-card-empty:hover{border-color:var(--accent);background:#f8f7ff}.grid-card-empty span{font-size:28px;color:#bbb}
+.grid-pagination{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:16px;padding:12px 0}
+.grid-pagination .page-btn{padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:var(--card);cursor:pointer;font-size:12px;font-weight:600;transition:all .2s}
+.grid-pagination .page-btn:hover{background:var(--bg);border-color:var(--accent)}
+.grid-pagination .page-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.grid-pagination .page-btn:disabled{opacity:.4;cursor:not-allowed}
+.grid-pagination .page-info{font-size:12px;color:var(--text-muted);font-weight:500}
 .grid-checklist{display:flex;gap:4px;margin-top:4px;flex-wrap:wrap}
 .grid-checklist-dot{width:8px;height:8px;border-radius:50%;border:1.5px solid #ccc}
 .grid-checklist-dot.done{background:var(--accent);border-color:var(--accent)}
@@ -223,7 +229,7 @@ if(sessionStorage.getItem('cp_auth')==='1'){
 <nav class="nav">
   <div class="nav-brand">Content Planner</div>
   <div class="nav-actions">
-    <button class="btn btn-sync btn-sm" id="syncBtn" onclick="syncPull()" title="Pull latest from Google Sheet">Sync</button>
+    <button class="btn btn-sync btn-sm" id="syncBtn" onclick="manualSync()" title="Pull latest from Google Sheet">Sync</button>
     <span class="sync-status" id="syncStatus"></span>
     <button class="btn btn-secondary btn-sm" onclick="exportData()">Export</button>
     <button class="btn btn-secondary btn-sm" onclick="document.getElementById('importInput').click()">Import</button>
@@ -267,6 +273,7 @@ if(sessionStorage.getItem('cp_auth')==='1'){
   <div class="summary-bar" id="summaryBar"></div>
   <div class="legend" id="legendBar"></div>
   <div class="grid-container" id="gridContainer"></div>
+  <div class="grid-pagination" id="gridPagination"></div>
 </div>
 
 <!-- CALENDAR -->
@@ -386,6 +393,12 @@ function setSyncStatus(msg,isError){
   btn.classList.toggle('syncing',isSyncing);
 }
 
+function manualSync(){
+  if(!sheetUrl){showToast('No Google Sheet connected — go to Settings to set it up');return}
+  if(isSyncing){showToast('Sync already in progress...');return}
+  syncPull();
+}
+
 async function syncPull(){
   if(!sheetUrl||isSyncing)return;
   isSyncing=true;setSyncStatus('Pulling...', false);
@@ -422,7 +435,7 @@ async function syncPush(){
     const cleanPosts=await Promise.all(posts.map(async p=>{
       const c={...p};
       if(c.thumbnail&&c.thumbnail.startsWith('data:')&&c.thumbnail.length>40000){
-        c.thumbnail=await resizeImage(c.thumbnail,300);
+        c.thumbnail=await resizeImage(c.thumbnail,600);
       }
       return c;
     }));
@@ -456,13 +469,42 @@ function autoPush(){
   pushTimer=setTimeout(()=>syncPush(),1500);
 }
 
+// Auto-pull every 3 seconds so all team members stay in near real-time sync
+let autoPullTimer=null;
+function startAutoSync(){
+  if(autoPullTimer)clearInterval(autoPullTimer);
+  autoPullTimer=setInterval(async()=>{
+    // Skip if no sheet URL, already syncing, modal is open, or a push is pending
+    const modal=document.getElementById('modalOverlay');
+    if(!sheetUrl||isSyncing||(modal&&modal.classList.contains('active'))||pushTimer)return;
+    try{
+      const res=await fetch(sheetUrl);
+      const data=await res.json();
+      if(data.error||!data.posts)return;
+      // Quick fingerprint to skip if nothing changed
+      const remoteKey=data.posts.map(p=>`${p.id}:${p.status}:${p.date}:${(p.caption||'').length}:${p.lastUpdated||''}`).join('|');
+      const localKey=posts.map(p=>`${p.id}:${p.status}:${p.date}:${(p.caption||'').length}:${p.lastUpdated||''}`).join('|');
+      if(remoteKey===localKey)return;
+      // Merge: keep local thumbnails if remote doesn't have one
+      const localThumbs={};
+      posts.forEach(p=>{if(p.thumbnail)localThumbs[p.id]=p.thumbnail});
+      posts=data.posts.map(p=>({...p,thumbnail:p.thumbnail||localThumbs[p.id]||null}));
+      if(data.config){config=data.config;if(!config.defaultChecklist)config.defaultChecklist=['Raw Footage Ready','Video Edited','Thumbnail Done','Caption Written','Reference Uploaded'];}
+      saveToStorage();rebuildChannelTabs();buildPipelineColumns();populateFormDropdowns();populateFilterDropdowns();renderAll();
+      const now=new Date();
+      setSyncStatus(`Live · ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`,false);
+    }catch(err){}
+  },3000);
+}
+function stopAutoSync(){if(autoPullTimer){clearInterval(autoPullTimer);autoPullTimer=null;}}
+
 // ============ INIT ============
 document.addEventListener('DOMContentLoaded',()=>{
   sheetUrl=getSheetUrl();
   loadFromStorage();rebuildChannelTabs();buildPipelineColumns();populateFormDropdowns();populateFilterDropdowns();renderAll();setupThumbDragDrop();setupNavListeners();
   updateSyncUI();
-  // Auto-pull on load if connected
-  if(sheetUrl)setTimeout(()=>syncPull(),500);
+  // Auto-pull on load if connected, then start polling
+  if(sheetUrl){setTimeout(()=>syncPull(),500);setTimeout(()=>startAutoSync(),2000);}
 });
 
 function setupNavListeners(){document.querySelectorAll('.view-tab').forEach(tab=>{tab.addEventListener('click',()=>{document.querySelectorAll('.view-tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.view').forEach(v=>{if(v.id!=='view-settings')v.classList.remove('active')});tab.classList.add('active');activeView=tab.dataset.view;document.getElementById('view-'+activeView).classList.add('active');document.getElementById('view-settings').classList.remove('active');renderAll()})})}
@@ -524,14 +566,22 @@ function formatTime12(t){if(!t)return'';const[h,m]=t.split(':').map(Number),ap=h
 function getDaysUntil(ds){if(!ds)return null;const t=new Date();t.setHours(0,0,0,0);return Math.ceil((new Date(ds+'T00:00:00')-t)/864e5)}
 function getDaysLabel(d){if(d===null)return'<span class="date-warning">No date!</span>';if(d<0)return`<span class="days-left past">${Math.abs(d)}d overdue</span>`;if(d===0)return'<span class="days-left urgent">TODAY</span>';if(d===1)return'<span class="days-left urgent">Tomorrow</span>';if(d<=3)return`<span class="days-left urgent">${d}d left</span>`;if(d<=7)return`<span class="days-left soon">${d}d left</span>`;return`<span class="days-left ok">${d}d left</span>`}
 
-// ============ GRID (drag-to-reschedule) ============
+// ============ GRID (drag-to-reschedule + pagination) ============
 let gridDragId=null,gridDragStarted=false;
+const POSTS_PER_PAGE=21;
+let gridPage=0;
 
 function renderGrid(){
   const c=document.getElementById('gridContainer');
+  const pg=document.getElementById('gridPagination');
   let f=applyFilters(getChannelPosts()).sort((a,b)=>new Date(b.date||'2000-01-01')-new Date(a.date||'2000-01-01'));
+  const totalPages=Math.max(1,Math.ceil(f.length/POSTS_PER_PAGE));
+  if(gridPage>=totalPages)gridPage=totalPages-1;
+  if(gridPage<0)gridPage=0;
+  const start=gridPage*POSTS_PER_PAGE;
+  const pageItems=f.slice(start,start+POSTS_PER_PAGE);
   let html='';
-  f.forEach(p=>{
+  pageItems.forEach(p=>{
     const bg=getStatusColor(p.status),pillarBg=getPillarColor(p.pillar),ts=p.time?formatTime12(p.time):'12pm',dd=p.date?`${formatDate(p.date)} | ${ts}`:'Unscheduled';
     const cl=p.checklist||[];const clDone=cl.filter(x=>x.done).length;
     const cmCount=(p.comments||[]).length;
@@ -558,9 +608,18 @@ function renderGrid(){
       </div>
     </div>`;
   });
-  const rem=f.length%3;if(rem>0)for(let i=0;i<3-rem;i++)html+=`<div class="grid-card-empty" onclick="openModal()"><span>+</span></div>`;
-  if(f.length===0)html=`<div class="grid-card-empty" onclick="openModal()"><span>+</span></div>`.repeat(3);
+  const rem=pageItems.length%3;if(rem>0)for(let i=0;i<3-rem;i++)html+=`<div class="grid-card-empty" onclick="openModal()"><span>+</span></div>`;
+  if(pageItems.length===0)html=`<div class="grid-card-empty" onclick="openModal()"><span>+</span></div>`.repeat(3);
   c.innerHTML=html;
+  // Pagination controls
+  if(f.length>POSTS_PER_PAGE){
+    let ph=`<button class="page-btn" onclick="gridPage=0;renderGrid()" ${gridPage===0?'disabled':''}>First</button>`;
+    ph+=`<button class="page-btn" onclick="gridPage--;renderGrid()" ${gridPage===0?'disabled':''}>&larr; Prev</button>`;
+    ph+=`<span class="page-info">Page ${gridPage+1} of ${totalPages} (${f.length} posts)</span>`;
+    ph+=`<button class="page-btn" onclick="gridPage++;renderGrid()" ${gridPage>=totalPages-1?'disabled':''}>Next &rarr;</button>`;
+    ph+=`<button class="page-btn" onclick="gridPage=${totalPages-1};renderGrid()" ${gridPage>=totalPages-1?'disabled':''}>Last</button>`;
+    pg.innerHTML=ph;pg.style.display='flex';
+  } else {pg.innerHTML='';pg.style.display='none';}
 }
 
 function gridDragStart(e,id){gridDragId=id;gridDragStarted=true;e.target.closest('.grid-card').classList.add('dragging');e.dataTransfer.effectAllowed='move'}
