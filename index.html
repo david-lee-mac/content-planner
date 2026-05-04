@@ -60,7 +60,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .grid-card-body .caption-text{font-size:11px;color:#555;margin-top:2px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .grid-card-body .remark-text{font-size:11px;color:#e17055;font-style:italic;margin-top:2px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .grid-card-body .date-line{font-weight:600;color:var(--text)}.grid-card-body .usp-line{font-weight:600;font-size:13px;color:var(--text)}
-.grid-card .status-bar{height:6px;width:100%;flex-shrink:0}
+.grid-card .status-bar{height:6px;width:100%;flex-shrink:0;cursor:pointer;transition:height .15s;position:relative;z-index:3}
+.grid-card .status-bar:hover{height:10px}
+.status-dropdown{position:absolute;top:0;left:0;right:0;z-index:50;background:var(--card);border-radius:0 0 8px 8px;box-shadow:0 4px 16px rgba(0,0,0,.18);padding:4px;display:none;flex-direction:column;gap:2px}
+.status-dropdown.open{display:flex}
+.status-dropdown-item{padding:6px 10px;font-size:11px;font-weight:600;border-radius:4px;cursor:pointer;display:flex;align-items:center;gap:8px;transition:background .15s}
+.status-dropdown-item:hover{filter:brightness(.92)}
+.status-dropdown-item .swatch{width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.1);flex-shrink:0}
+.status-dropdown-item.current{outline:2px solid var(--accent);outline-offset:-1px}
 .grid-card-empty{border:2px dashed #ccc;display:flex;align-items:center;justify-content:center;min-height:200px;background:0 0;cursor:pointer;border-radius:6px}
 .grid-card-empty:hover{border-color:var(--accent);background:#f8f7ff}.grid-card-empty span{font-size:28px;color:#bbb}
 .grid-pagination{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:16px;padding:12px 0}
@@ -593,7 +600,8 @@ function renderGrid(){
       ondrop="gridDrop(event,'${p.id}')"
       onclick="gridClick(event,'${p.id}')">
       <div class="drag-handle">Drag to swap</div>
-      <div class="status-bar" style="background:${bg}"></div>
+      <div class="status-bar" style="background:${bg}" onclick="event.stopPropagation();toggleStatusDropdown('${p.id}',this)" title="Click to change status"></div>
+      <div class="status-dropdown" id="sd-${p.id}">${config.statuses.map(s=>`<div class="status-dropdown-item${s.name===p.status?' current':''}" style="background:${s.color}" onclick="event.stopPropagation();inlineChangeStatus('${p.id}','${s.name.replace(/'/g,"\\'")}')"><div class="swatch" style="background:${s.color}"></div>${s.name}</div>`).join('')}</div>
       <div class="grid-card-image">${p.thumbnail?`<img src="${p.thumbnail}">`:'<div class="no-img">+</div>'}</div>
       <div class="grid-card-body" style="background:${bg}">
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="post-type-pill">${p.type}</span><span class="pillar-pill" style="background:${pillarBg}">${p.pillar}</span></div>
@@ -635,12 +643,55 @@ function gridDrop(e,targetId){
   const tmpDate=a.date,tmpTime=a.time;
   a.date=b.date;a.time=b.time;
   b.date=tmpDate;b.time=tmpTime;
+  a.lastUpdated=new Date().toISOString();b.lastUpdated=new Date().toISOString();
   gridDragId=null;
-  saveToStorage();renderAll();autoPush();
+  saveToStorage();renderAll();
+  syncPost(a);syncPost(b);
   showToast(`Swapped: "${a.usp||'Untitled'}" and "${b.usp||'Untitled'}" dates`);
 }
 function gridClick(e,id){if(!gridDragStarted||!gridDragId)openModal(id)}
 function showToast(msg){const d=document.createElement('div');d.className='grid-swap-toast';d.textContent=msg;document.body.appendChild(d);setTimeout(()=>d.remove(),2600)}
+
+// ============ INLINE STATUS CHANGE ============
+function toggleStatusDropdown(postId,barEl){
+  // Close any other open dropdowns first
+  document.querySelectorAll('.status-dropdown.open').forEach(d=>d.classList.remove('open'));
+  const dd=document.getElementById('sd-'+postId);
+  if(dd)dd.classList.toggle('open');
+  // Close on outside click
+  const closer=e=>{if(!dd.contains(e.target)&&e.target!==barEl){dd.classList.remove('open');document.removeEventListener('click',closer)}};
+  setTimeout(()=>document.addEventListener('click',closer),0);
+}
+function inlineChangeStatus(postId,newStatus){
+  const post=posts.find(p=>p.id===postId);
+  if(!post||post.status===newStatus)return;
+  post.status=newStatus;
+  post.lastUpdated=new Date().toISOString();
+  saveToStorage();renderAll();
+  syncPost(post);
+  showToast(`"${post.usp||'Untitled'}" → ${newStatus}`);
+}
+
+// ============ PER-POST SYNC (single row update) ============
+async function syncPost(post){
+  if(!sheetUrl)return;
+  try{
+    const p={...post};
+    if(p.thumbnail&&p.thumbnail.startsWith('data:')&&p.thumbnail.length>40000){
+      p.thumbnail=await resizeImage(p.thumbnail,600);
+    }
+    await fetch(sheetUrl,{
+      method:'POST',
+      mode:'no-cors',
+      redirect:'follow',
+      body:JSON.stringify({action:'updatePost',post:p})
+    });
+    const now=new Date();
+    setSyncStatus(`Saved · ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`,false);
+  }catch(err){
+    setSyncStatus('Save failed',true);
+  }
+}
 
 // ============ CALENDAR ============
 function renderCalendar(){
@@ -742,9 +793,10 @@ function closeModal(){document.getElementById('modalOverlay').classList.remove('
 function savePost(e){
   e.preventDefault();
   const id=document.getElementById('postId').value||('p_'+Date.now()+'_'+Math.random().toString(36).substr(2,5));
-  const pd={id,channel:document.getElementById('postChannel').value,type:document.getElementById('postType').value,pillar:document.getElementById('postPillar').value,status:document.getElementById('postStatus').value,usp:document.getElementById('postUSP').value,date:document.getElementById('postDate').value,time:document.getElementById('postTime').value,caption:document.getElementById('postCaption').value,remarks:document.getElementById('postRemarks').value,refLink:document.getElementById('postRefLink').value,editedLink:document.getElementById('postEditedLink').value,thumbnail:currentThumb,checklist:modalChecklist,comments:modalComments};
+  const pd={id,channel:document.getElementById('postChannel').value,type:document.getElementById('postType').value,pillar:document.getElementById('postPillar').value,status:document.getElementById('postStatus').value,usp:document.getElementById('postUSP').value,date:document.getElementById('postDate').value,time:document.getElementById('postTime').value,caption:document.getElementById('postCaption').value,remarks:document.getElementById('postRemarks').value,refLink:document.getElementById('postRefLink').value,editedLink:document.getElementById('postEditedLink').value,thumbnail:currentThumb,checklist:modalChecklist,comments:modalComments,lastUpdated:new Date().toISOString()};
   const idx=posts.findIndex(p=>p.id===id);if(idx>=0)posts[idx]=pd;else posts.push(pd);
-  saveToStorage();renderAll();closeModal();autoPush();
+  saveToStorage();renderAll();closeModal();
+  syncPost(pd);
 }
 
 function resizeImage(base64,maxSize){
@@ -763,7 +815,14 @@ function resizeImage(base64,maxSize){
     img.src=base64;
   });
 }
-function deletePost(){const id=document.getElementById('postId').value;if(id&&confirm('Delete this post?')){posts=posts.filter(p=>p.id!==id);saveToStorage();renderAll();closeModal();autoPush()}}
+function deletePost(){const id=document.getElementById('postId').value;if(id&&confirm('Delete this post?')){posts=posts.filter(p=>p.id!==id);saveToStorage();renderAll();closeModal();syncDeletePost(id)}}
+async function syncDeletePost(postId){
+  if(!sheetUrl)return;
+  try{
+    await fetch(sheetUrl,{method:'POST',mode:'no-cors',redirect:'follow',body:JSON.stringify({action:'deletePost',postId})});
+    const now=new Date();setSyncStatus(`Deleted · ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`,false);
+  }catch(err){setSyncStatus('Delete sync failed',true)}
+}
 
 // ============ MODAL CHECKLIST ============
 function renderModalChecklist(){
