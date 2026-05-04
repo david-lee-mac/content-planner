@@ -323,7 +323,7 @@ if(sessionStorage.getItem('cp_auth')==='1'){
     <h2 id="modalTitle">New Post</h2>
     <form id="postForm" onsubmit="savePost(event)">
       <input type="hidden" id="postId">
-      <div class="form-group"><label>Thumbnail</label><div class="thumb-dropzone" id="thumbDropzone" onclick="document.getElementById('thumbInput').click()"><div class="placeholder"><span>+</span>Drop image/video or click</div></div><input type="file" id="thumbInput" accept="image/*,video/*" style="display:none" onchange="handleThumbSelect(event)"></div>
+      <div class="form-group"><label>Thumbnail</label><div class="thumb-dropzone" id="thumbDropzone" onclick="document.getElementById('thumbInput').click()"><div class="placeholder"><span>+</span>Drop, click, or paste (Ctrl+V)</div></div><input type="file" id="thumbInput" accept="image/*,video/*" style="display:none" onchange="handleThumbSelect(event)"></div>
       <div class="form-row"><div class="form-group"><label>Channel</label><select id="postChannel"></select></div><div class="form-group"><label>Post Type</label><select id="postType"></select></div></div>
       <div class="form-row"><div class="form-group"><label>Content Pillar</label><select id="postPillar"></select></div><div class="form-group"><label>Status</label><select id="postStatus"></select></div></div>
       <div class="form-group"><label>Product / USP</label><input type="text" id="postUSP" placeholder="e.g., Leona, The Machino Take-Off Sale"></div>
@@ -581,7 +581,7 @@ let gridPage=0;
 function renderGrid(){
   const c=document.getElementById('gridContainer');
   const pg=document.getElementById('gridPagination');
-  let f=applyFilters(getChannelPosts()).sort((a,b)=>new Date(b.date||'2000-01-01')-new Date(a.date||'2000-01-01'));
+  let f=applyFilters(getChannelPosts()).sort((a,b)=>new Date(a.date||'9999-12-31')-new Date(b.date||'9999-12-31'));
   const totalPages=Math.max(1,Math.ceil(f.length/POSTS_PER_PAGE));
   if(gridPage>=totalPages)gridPage=totalPages-1;
   if(gridPage<0)gridPage=0;
@@ -759,7 +759,7 @@ function openModal(id){
   populateFormDropdowns();
   const overlay=document.getElementById('modalOverlay'),form=document.getElementById('postForm'),title=document.getElementById('modalTitle'),del=document.getElementById('deleteBtn'),dz=document.getElementById('thumbDropzone');
   form.reset();currentThumb=null;modalChecklist=[];modalComments=[];
-  dz.innerHTML='<div class="placeholder"><span>+</span>Drop image/video or click</div>';
+  dz.innerHTML='<div class="placeholder"><span>+</span>Drop, click, or paste (Ctrl+V)</div>';
   document.getElementById('postTime').value='12:00';
   document.getElementById('postChannel').value=activeChannel==='overview'?(config.channels[0]?.id||'ig'):activeChannel;
   if(id){
@@ -845,7 +845,27 @@ function addComment(){const inp=document.getElementById('newComment');if(!inp.va
   modalComments.push({text:inp.value.trim(),timestamp:ts});inp.value='';renderModalComments()}
 
 // ============ THUMBNAIL ============
-function setupThumbDragDrop(){const dz=document.getElementById('thumbDropzone');dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('dragover')});dz.addEventListener('dragleave',()=>dz.classList.remove('dragover'));dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('dragover');if(e.dataTransfer.files[0])processThumbFile(e.dataTransfer.files[0])})}
+function setupThumbDragDrop(){
+  const dz=document.getElementById('thumbDropzone');
+  dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('dragover')});
+  dz.addEventListener('dragleave',()=>dz.classList.remove('dragover'));
+  dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('dragover');if(e.dataTransfer.files[0])processThumbFile(e.dataTransfer.files[0])});
+  // Clipboard paste support — works when modal is open
+  document.addEventListener('paste',e=>{
+    const modal=document.getElementById('modalOverlay');
+    if(!modal||!modal.classList.contains('active'))return;
+    const items=e.clipboardData&&e.clipboardData.items;
+    if(!items)return;
+    for(let i=0;i<items.length;i++){
+      if(items[i].type.startsWith('image/')){
+        e.preventDefault();
+        const file=items[i].getAsFile();
+        if(file)processThumbFile(file);
+        break;
+      }
+    }
+  });
+}
 function handleThumbSelect(e){if(e.target.files[0])processThumbFile(e.target.files[0])}
 function processThumbFile(file){const dz=document.getElementById('thumbDropzone');if(file.type.startsWith('video/')){const v=document.createElement('video');v.preload='metadata';v.onloadeddata=()=>{v.currentTime=1};v.onseeked=()=>{const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);currentThumb=c.toDataURL('image/jpeg',.8);dz.innerHTML=`<img src="${currentThumb}">`;URL.revokeObjectURL(v.src)};v.src=URL.createObjectURL(file)}else{const r=new FileReader();r.onload=e=>{currentThumb=e.target.result;dz.innerHTML=`<img src="${currentThumb}">`};r.readAsDataURL(file)}}
 
