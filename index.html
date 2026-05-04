@@ -76,9 +76,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .grid-pagination .page-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
 .grid-pagination .page-btn:disabled{opacity:.4;cursor:not-allowed}
 .grid-pagination .page-info{font-size:12px;color:var(--text-muted);font-weight:500}
-.grid-checklist{display:flex;gap:4px;margin-top:4px;flex-wrap:wrap}
-.grid-checklist-dot{width:8px;height:8px;border-radius:50%;border:1.5px solid #ccc}
-.grid-checklist-dot.done{background:var(--accent);border-color:var(--accent)}
 .grid-comment-count{font-size:10px;color:var(--text-muted);margin-top:3px}
 
 .legend{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}
@@ -130,24 +127,21 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .thumb-dropzone .placeholder{text-align:center;color:var(--text-muted);font-size:13px;padding:12px}
 .thumb-dropzone .placeholder span{display:block;font-size:28px;margin-bottom:6px}
 
-/* CHECKLIST IN MODAL */
-.checklist-section{margin-bottom:14px}
-.checklist-section label{display:block;font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.3px}
-.checklist-items{display:flex;flex-direction:column;gap:4px}
-.checklist-item{display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg);border-radius:6px;font-size:13px}
-.checklist-item input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}
-.checklist-item .cl-label{flex:1}
-.checklist-item .cl-remove{background:none;border:none;color:#d63031;cursor:pointer;font-size:14px;padding:0 4px}
-.checklist-add{display:flex;gap:6px;margin-top:6px}
-.checklist-add input{flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px}
-
 /* COMMENTS IN MODAL */
 .comments-section{margin-bottom:14px}
 .comments-section label{display:block;font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.3px}
 .comment-list{display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto;margin-bottom:8px}
-.comment-item{background:var(--bg);border-radius:8px;padding:8px 12px}
-.comment-item .comment-meta{font-size:10px;color:var(--text-muted);margin-bottom:3px}
+.comment-item{background:var(--bg);border-radius:8px;padding:8px 12px;position:relative}
+.comment-item.resolved{opacity:.5;text-decoration:line-through}
+.comment-item .comment-meta{font-size:10px;color:var(--text-muted);margin-bottom:3px;display:flex;align-items:center;justify-content:space-between}
 .comment-item .comment-text{font-size:13px}
+.comment-item .comment-actions{display:flex;gap:4px}
+.comment-item .comment-actions button{background:none;border:none;cursor:pointer;font-size:11px;padding:2px 6px;border-radius:4px;font-weight:600}
+.comment-item .comment-actions .btn-resolve{color:#00b894}.comment-item .comment-actions .btn-resolve:hover{background:#e0fcef}
+.comment-item .comment-actions .btn-delete{color:#d63031}.comment-item .comment-actions .btn-delete:hover{background:#ffeaea}
+.ref-link-row{display:flex;gap:6px;margin-bottom:6px;align-items:center}
+.ref-link-row input{flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px}
+.ref-link-row .btn-remove-link{background:none;border:none;color:#d63031;cursor:pointer;font-size:18px;padding:0 6px;border-radius:4px}.ref-link-row .btn-remove-link:hover{background:#ffeaea}
 .comment-add{display:flex;gap:6px}
 .comment-add input{flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px}
 
@@ -313,7 +307,6 @@ if(sessionStorage.getItem('cp_auth')==='1'){
     <div class="settings-section"><h3>Content Pillars</h3><div class="settings-list" id="pillarList"></div><div class="settings-add-row"><input type="text" id="newPillarName" placeholder="New pillar name..."><div class="color-input-wrap"><div class="color-preview" id="newPillarColorPreview" style="background:#ccc"></div><input type="color" id="newPillarColor" value="#cccccc" onchange="document.getElementById('newPillarColorPreview').style.background=this.value"></div><button class="btn btn-primary btn-sm" onclick="addPillar()">Add</button></div></div>
     <div class="settings-section"><h3>Post Types</h3><div class="settings-list" id="postTypeList"></div><div class="settings-add-row"><input type="text" id="newPostTypeName" placeholder="New post type..."><button class="btn btn-primary btn-sm" onclick="addPostType()">Add</button></div></div>
     <div class="settings-section"><h3>Channels</h3><div class="settings-list" id="channelList"></div><div class="settings-add-row"><input type="text" id="newChannelId" placeholder="Short ID" style="max-width:120px"><input type="text" id="newChannelLabel" placeholder="Display name"><button class="btn btn-primary btn-sm" onclick="addChannel()">Add</button></div></div>
-    <div class="settings-section"><h3>Default Checklist Items</h3><p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">These items are added to every new post automatically.</p><div class="settings-list" id="checklistDefaultList"></div><div class="settings-add-row"><input type="text" id="newChecklistDefault" placeholder="New checklist item..."><button class="btn btn-primary btn-sm" onclick="addChecklistDefault()">Add</button></div></div>
   </div>
 </div>
 
@@ -330,18 +323,17 @@ if(sessionStorage.getItem('cp_auth')==='1'){
       <div class="form-row"><div class="form-group"><label>Scheduled Date <span style="color:#d63031">*</span></label><input type="date" id="postDate" required></div><div class="form-group"><label>Scheduled Time</label><input type="time" id="postTime" value="12:00"></div></div>
       <div class="form-group"><label>Caption</label><textarea id="postCaption" placeholder="Write your caption here..."></textarea></div>
       <div class="form-group"><label>Remarks</label><textarea id="postRemarks" placeholder="Any notes for the team..." style="min-height:50px"></textarea></div>
-      <div class="form-row"><div class="form-group"><label>Reference Link</label><input type="url" id="postRefLink" placeholder="https://..."></div><div class="form-group"><label>Edited Content Link</label><input type="url" id="postEditedLink" placeholder="https://drive.google.com/..."></div></div>
-
-      <!-- CHECKLIST -->
-      <div class="checklist-section">
-        <label>Asset Checklist</label>
-        <div class="checklist-items" id="checklistItems"></div>
-        <div class="checklist-add"><input type="text" id="newChecklistItem" placeholder="Add checklist item..." onkeydown="if(event.key==='Enter'){event.preventDefault();addChecklistItem()}"><button type="button" class="btn btn-secondary btn-sm" onclick="addChecklistItem()">+</button></div>
+      <!-- REFERENCE LINKS (multiple) -->
+      <div class="form-group">
+        <label>Reference Links</label>
+        <div id="refLinksContainer"></div>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="addRefLinkField()" style="margin-top:6px">+ Add Link</button>
       </div>
+      <div class="form-group"><label>Edited Content Link</label><input type="url" id="postEditedLink" placeholder="https://drive.google.com/..."></div>
 
-      <!-- COMMENTS -->
+      <!-- COMMENTS (with resolve) -->
       <div class="comments-section">
-        <label>Activity Log / Comments</label>
+        <label>Comments</label>
         <div class="comment-list" id="commentList"></div>
         <div class="comment-add"><input type="text" id="newComment" placeholder="Add a comment..." onkeydown="if(event.key==='Enter'){event.preventDefault();addComment()}"><button type="button" class="btn btn-primary btn-sm" onclick="addComment()">Post</button></div>
       </div>
@@ -366,7 +358,7 @@ let config = {
 };
 const CHANNEL_COLORS=['#6c5ce7','#00b894','#e17055','#0984e3','#fdcb6e','#e84393','#00cec9'];
 let posts=[],currentMonth=new Date().getMonth(),currentYear=new Date().getFullYear(),currentThumb=null,activeChannel='ig',activeView='grid',isOverview=false;
-let modalChecklist=[],modalComments=[];
+let modalComments=[];
 
 // ============ GOOGLE SHEETS SYNC ============
 const SHEET_URL='https://script.google.com/a/macros/machino.com.my/s/AKfycbynTwytIKMgsy4bUxEKnyIc2SCWf9A-nSSa-gc9Al835TuVLpHNoJdPHouZ7GMyaJPV8w/exec';
@@ -581,7 +573,7 @@ let gridPage=0;
 function renderGrid(){
   const c=document.getElementById('gridContainer');
   const pg=document.getElementById('gridPagination');
-  let f=applyFilters(getChannelPosts()).sort((a,b)=>new Date(a.date||'9999-12-31')-new Date(b.date||'9999-12-31'));
+  let f=applyFilters(getChannelPosts()).sort((a,b)=>new Date(b.date||'2000-01-01')-new Date(a.date||'2000-01-01'));
   const totalPages=Math.max(1,Math.ceil(f.length/POSTS_PER_PAGE));
   if(gridPage>=totalPages)gridPage=totalPages-1;
   if(gridPage<0)gridPage=0;
@@ -590,8 +582,8 @@ function renderGrid(){
   let html='';
   pageItems.forEach(p=>{
     const bg=getStatusColor(p.status),pillarBg=getPillarColor(p.pillar),ts=p.time?formatTime12(p.time):'12pm',dd=p.date?`${formatDate(p.date)} | ${ts}`:'Unscheduled';
-    const cl=p.checklist||[];const clDone=cl.filter(x=>x.done).length;
-    const cmCount=(p.comments||[]).length;
+    const cmCount=(p.comments||[]).filter(c=>!c.resolved).length;
+    const refLinks=p.refLinks||( p.refLink?[p.refLink]:[]);
     html+=`<div class="grid-card" draggable="true" data-id="${p.id}"
       ondragstart="gridDragStart(event,'${p.id}')"
       ondragend="gridDragEnd(event)"
@@ -607,12 +599,11 @@ function renderGrid(){
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="post-type-pill">${p.type}</span><span class="pillar-pill" style="background:${pillarBg}">${p.pillar}</span></div>
         <div class="date-line">${dd}</div>
         <div class="usp-line">${p.usp||'Untitled'}</div>
-        ${p.refLink?`<div class="link-row"><a href="${p.refLink}" target="_blank" onclick="event.stopPropagation()">Reference Link</a></div>`:'<div style="color:#bbb;font-size:11px">Reference Link</div>'}
+        ${refLinks.length?refLinks.map((l,i)=>`<div class="link-row"><a href="${l}" target="_blank" onclick="event.stopPropagation()">Reference ${refLinks.length>1?i+1:''}</a></div>`).join(''):'<div style="color:#bbb;font-size:11px">Reference Link</div>'}
         ${p.editedLink?`<div class="link-row"><a href="${p.editedLink}" target="_blank" onclick="event.stopPropagation()">Edited Content Link</a></div>`:'<div style="color:#bbb;font-size:11px">Edited Content Link</div>'}
         ${p.caption?`<div class="caption-text"><b>Caption:</b> ${p.caption}</div>`:'<div style="color:#bbb;font-size:11px">Caption:</div>'}
         ${p.remarks?`<div class="remark-text"><b>Remarks:</b> ${p.remarks}</div>`:''}
-        ${cl.length?`<div class="grid-checklist" title="${clDone}/${cl.length} done">${cl.map(x=>`<div class="grid-checklist-dot${x.done?' done':''}"></div>`).join('')}</div>`:''}
-        ${cmCount?`<div class="grid-comment-count">💬 ${cmCount} comment${cmCount>1?'s':''}</div>`:''}
+        ${cmCount?`<div class="grid-comment-count">💬 ${cmCount} open comment${cmCount>1?'s':''}</div>`:''}
       </div>
     </div>`;
   });
@@ -717,11 +708,11 @@ function renderPipeline(){
   config.statuses.forEach(st=>{const container=document.getElementById('cards-'+st.name),countEl=document.getElementById('count-'+st.name);if(!container||!countEl)return;
   let sp=cp.filter(p=>p.status===st.name);countEl.textContent=sp.length;
   sp.sort((a,b)=>{if(!a.date&&!b.date)return 0;if(!a.date)return-1;if(!b.date)return-1;return new Date(a.date)-new Date(b.date)});
-  container.innerHTML=sp.map(p=>{const days=getDaysUntil(p.date),dl=st.name!=='Posted'?getDaysLabel(days):'';const cl=p.checklist||[];const clDone=cl.filter(x=>x.done).length;
+  container.innerHTML=sp.map(p=>{const days=getDaysUntil(p.date),dl=st.name!=='Posted'?getDaysLabel(days):'';
     return`<div class="pipeline-card" draggable="true" ondragstart="dragCard(event,'${p.id}')" onclick="openModal('${p.id}')">
       <div class="pipeline-card-thumb">${p.thumbnail?`<img src="${p.thumbnail}">`:''}</div>
       <div class="pipeline-card-title">${p.usp||'Untitled'}</div>
-      <div class="pipeline-card-meta">${p.type} · ${p.date?formatDate(p.date):'No date'}${cl.length?` · ✓${clDone}/${cl.length}`:''}</div>
+      <div class="pipeline-card-meta">${p.type} · ${p.date?formatDate(p.date):'No date'}</div>
       <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center"><span class="pillar-tag" style="background:${getPillarColor(p.pillar)}">${p.pillar}</span> ${dl}</div>
       ${p.remarks?`<div class="remark-preview">📝 ${p.remarks}</div>`:''}
     </div>`}).join('')});
@@ -758,7 +749,7 @@ function renderOverview(){
 function openModal(id){
   populateFormDropdowns();
   const overlay=document.getElementById('modalOverlay'),form=document.getElementById('postForm'),title=document.getElementById('modalTitle'),del=document.getElementById('deleteBtn'),dz=document.getElementById('thumbDropzone');
-  form.reset();currentThumb=null;modalChecklist=[];modalComments=[];
+  form.reset();currentThumb=null;modalRefLinks=[];modalComments=[];
   dz.innerHTML='<div class="placeholder"><span>+</span>Drop, click, or paste (Ctrl+V)</div>';
   document.getElementById('postTime').value='12:00';
   document.getElementById('postChannel').value=activeChannel==='overview'?(config.channels[0]?.id||'ig'):activeChannel;
@@ -775,17 +766,19 @@ function openModal(id){
     document.getElementById('postTime').value=p.time||'12:00';
     document.getElementById('postCaption').value=p.caption||'';
     document.getElementById('postRemarks').value=p.remarks||'';
-    document.getElementById('postRefLink').value=p.refLink||'';
+    // Load ref links (support old single refLink or new array)
+    if(Array.isArray(p.refLinks))modalRefLinks=[...p.refLinks];
+    else if(p.refLink)modalRefLinks=[p.refLink];
+    else modalRefLinks=[];
     document.getElementById('postEditedLink').value=p.editedLink||'';
     if(p.thumbnail){currentThumb=p.thumbnail;dz.innerHTML=`<img src="${p.thumbnail}">`}
-    modalChecklist=(p.checklist||[]).map(x=>({...x}));
     modalComments=(p.comments||[]).map(x=>({...x}));
   } else {
     title.textContent='New Post';del.style.display='none';document.getElementById('postId').value='';
-    modalChecklist=(config.defaultChecklist||[]).map(label=>({label,done:false}));
+    modalRefLinks=[];
     modalComments=[];
   }
-  renderModalChecklist();renderModalComments();
+  renderRefLinks();renderModalComments();
   overlay.classList.add('active');
 }
 function closeModal(){document.getElementById('modalOverlay').classList.remove('active')}
@@ -793,7 +786,7 @@ function closeModal(){document.getElementById('modalOverlay').classList.remove('
 function savePost(e){
   e.preventDefault();
   const id=document.getElementById('postId').value||('p_'+Date.now()+'_'+Math.random().toString(36).substr(2,5));
-  const pd={id,channel:document.getElementById('postChannel').value,type:document.getElementById('postType').value,pillar:document.getElementById('postPillar').value,status:document.getElementById('postStatus').value,usp:document.getElementById('postUSP').value,date:document.getElementById('postDate').value,time:document.getElementById('postTime').value,caption:document.getElementById('postCaption').value,remarks:document.getElementById('postRemarks').value,refLink:document.getElementById('postRefLink').value,editedLink:document.getElementById('postEditedLink').value,thumbnail:currentThumb,checklist:modalChecklist,comments:modalComments,lastUpdated:new Date().toISOString()};
+  const pd={id,channel:document.getElementById('postChannel').value,type:document.getElementById('postType').value,pillar:document.getElementById('postPillar').value,status:document.getElementById('postStatus').value,usp:document.getElementById('postUSP').value,date:document.getElementById('postDate').value,time:document.getElementById('postTime').value,caption:document.getElementById('postCaption').value,remarks:document.getElementById('postRemarks').value,refLinks:modalRefLinks.filter(l=>l.trim()),refLink:modalRefLinks.filter(l=>l.trim())[0]||'',editedLink:document.getElementById('postEditedLink').value,thumbnail:currentThumb,comments:modalComments,lastUpdated:new Date().toISOString()};
   const idx=posts.findIndex(p=>p.id===id);if(idx>=0)posts[idx]=pd;else posts.push(pd);
   saveToStorage();renderAll();closeModal();
   syncPost(pd);
@@ -824,25 +817,32 @@ async function syncDeletePost(postId){
   }catch(err){setSyncStatus('Delete sync failed',true)}
 }
 
-// ============ MODAL CHECKLIST ============
-function renderModalChecklist(){
-  document.getElementById('checklistItems').innerHTML=modalChecklist.map((item,i)=>`<div class="checklist-item">
-    <input type="checkbox" ${item.done?'checked':''} onchange="modalChecklist[${i}].done=this.checked">
-    <span class="cl-label">${item.label}</span>
-    <button type="button" class="cl-remove" onclick="modalChecklist.splice(${i},1);renderModalChecklist()">&times;</button>
+// ============ REFERENCE LINKS (multiple) ============
+let modalRefLinks=[];
+function renderRefLinks(){
+  const c=document.getElementById('refLinksContainer');
+  c.innerHTML=modalRefLinks.map((link,i)=>`<div class="ref-link-row">
+    <input type="url" value="${link}" placeholder="https://..." onchange="modalRefLinks[${i}]=this.value">
+    <button type="button" class="btn-remove-link" onclick="modalRefLinks.splice(${i},1);renderRefLinks()">&times;</button>
   </div>`).join('');
 }
-function addChecklistItem(){const inp=document.getElementById('newChecklistItem');if(!inp.value.trim())return;modalChecklist.push({label:inp.value.trim(),done:false});inp.value='';renderModalChecklist()}
+function addRefLinkField(){modalRefLinks.push('');renderRefLinks();const rows=document.querySelectorAll('#refLinksContainer input');if(rows.length)rows[rows.length-1].focus()}
 
-// ============ MODAL COMMENTS ============
+// ============ MODAL COMMENTS (with resolve/delete) ============
 function renderModalComments(){
   const list=document.getElementById('commentList');
-  list.innerHTML=modalComments.map(c=>`<div class="comment-item"><div class="comment-meta">${c.timestamp||''}</div><div class="comment-text">${c.text}</div></div>`).join('');
+  list.innerHTML=modalComments.map((c,i)=>`<div class="comment-item${c.resolved?' resolved':''}">
+    <div class="comment-meta"><span>${c.timestamp||''}</span><div class="comment-actions">${c.resolved?`<button type="button" class="btn-resolve" onclick="unresolveComment(${i})">Reopen</button>`:`<button type="button" class="btn-resolve" onclick="resolveComment(${i})">Resolve</button>`}<button type="button" class="btn-delete" onclick="deleteComment(${i})">Delete</button></div></div>
+    <div class="comment-text">${c.text}</div>
+  </div>`).join('');
   list.scrollTop=list.scrollHeight;
 }
 function addComment(){const inp=document.getElementById('newComment');if(!inp.value.trim())return;
   const now=new Date();const ts=`${String(now.getDate()).padStart(2,'0')}/${String(now.getMonth()+1).padStart(2,'0')}/${now.getFullYear()} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
-  modalComments.push({text:inp.value.trim(),timestamp:ts});inp.value='';renderModalComments()}
+  modalComments.push({text:inp.value.trim(),timestamp:ts,resolved:false});inp.value='';renderModalComments()}
+function resolveComment(i){modalComments[i].resolved=true;renderModalComments()}
+function unresolveComment(i){modalComments[i].resolved=false;renderModalComments()}
+function deleteComment(i){modalComments.splice(i,1);renderModalComments()}
 
 // ============ THUMBNAIL ============
 function setupThumbDragDrop(){
@@ -876,7 +876,6 @@ function renderSettings(){
   document.getElementById('pillarList').innerHTML=config.pillars.map((p,i)=>`<div class="settings-item"><div class="item-color-wrap"><div class="item-color" style="background:${p.color}"></div><input type="color" value="${p.color}" style="position:absolute;top:0;left:0;width:24px;height:24px;opacity:0;cursor:pointer" onchange="updatePillarColor(${i},this.value)"></div><span class="item-label">${p.name}</span><button class="btn-remove" onclick="removePillar(${i})">&times;</button></div>`).join('');
   document.getElementById('postTypeList').innerHTML=config.postTypes.map((t,i)=>`<div class="settings-item"><span class="item-label">${t}</span><button class="btn-remove" onclick="removePostType(${i})">&times;</button></div>`).join('');
   document.getElementById('channelList').innerHTML=config.channels.map((c,i)=>`<div class="settings-item"><span class="item-label">${c.icon||'📌'} ${c.label} <span style="color:var(--text-muted);font-size:11px">(${c.id})</span></span><button class="btn-remove" onclick="removeChannel(${i})">&times;</button></div>`).join('');
-  document.getElementById('checklistDefaultList').innerHTML=(config.defaultChecklist||[]).map((item,i)=>`<div class="settings-item"><span class="item-label">${item}</span><button class="btn-remove" onclick="removeChecklistDefault(${i})">&times;</button></div>`).join('');
 }
 function addStatus(){const n=document.getElementById('newStatusName'),c=document.getElementById('newStatusColor');if(!n.value.trim())return;config.statuses.push({name:n.value.trim(),color:c.value});n.value='';c.value='#cccccc';document.getElementById('newStatusColorPreview').style.background='#ccc';saveAndRefresh()}
 function removeStatus(i){if(config.statuses.length<=1)return alert('Need at least one.');config.statuses.splice(i,1);saveAndRefresh()}
@@ -888,8 +887,6 @@ function addPostType(){const n=document.getElementById('newPostTypeName');if(!n.
 function removePostType(i){if(config.postTypes.length<=1)return alert('Need at least one.');config.postTypes.splice(i,1);saveAndRefresh()}
 function addChannel(){const id=document.getElementById('newChannelId'),lb=document.getElementById('newChannelLabel');if(!id.value.trim()||!lb.value.trim())return;config.channels.push({id:id.value.trim(),label:lb.value.trim(),icon:'📌'});id.value='';lb.value='';saveAndRefresh();rebuildChannelTabs()}
 function removeChannel(i){if(config.channels.length<=1)return alert('Need at least one.');config.channels.splice(i,1);saveAndRefresh();rebuildChannelTabs()}
-function addChecklistDefault(){const n=document.getElementById('newChecklistDefault');if(!n.value.trim())return;if(!config.defaultChecklist)config.defaultChecklist=[];config.defaultChecklist.push(n.value.trim());n.value='';saveAndRefresh()}
-function removeChecklistDefault(i){config.defaultChecklist.splice(i,1);saveAndRefresh()}
 function saveAndRefresh(){saveToStorage();buildPipelineColumns();populateFormDropdowns();populateFilterDropdowns();renderSettings();renderAll();autoPush()}
 
 // ============ EXPORT / IMPORT ============
