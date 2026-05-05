@@ -25,6 +25,16 @@ body{font-family:'Georgia','Times New Roman',serif;background:var(--bg);color:va
 @keyframes pulse-sync{0%,100%{opacity:.7}50%{opacity:.4}}
 .sync-status{font-size:11px;color:var(--text-muted);max-width:140px;text-align:right;line-height:1.3}
 
+/* LIVE CONNECTION DOT */
+.nav-brand-wrap{display:flex;align-items:center;gap:10px}
+.conn-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;transition:background .3s}
+.conn-dot.live{background:#2e8b57;animation:dot-pulse 2s infinite}
+.conn-dot.reconnecting{background:var(--gold);animation:dot-pulse 1s infinite}
+.conn-dot.offline{background:#d63031;animation:none}
+@keyframes dot-pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(46,139,87,.4)}50%{opacity:.7;box-shadow:0 0 0 4px rgba(46,139,87,0)}}
+.pending-badge{display:none;align-items:center;gap:4px;font-size:10px;font-weight:600;color:var(--gold);background:var(--gold-light);padding:2px 8px;border-radius:10px;font-family:-apple-system,sans-serif}
+.pending-badge.has-pending{display:inline-flex}
+
 /* SEARCH BAR */
 .search-bar{display:flex;align-items:center;gap:8px;padding:10px 28px;background:var(--card);border-bottom:1px solid var(--border)}
 .search-input{flex:1;max-width:320px;padding:8px 14px 8px 34px;border:1px solid var(--border);border-radius:20px;font-size:13px;font-family:-apple-system,sans-serif;background:var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%237a7a7a' viewBox='0 0 16 16'%3E%3Cpath d='M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85zm-5.242.656a5 5 0 1 1 0-10 5 5 0 0 1 0 10z'/%3E%3C/svg%3E") 10px center no-repeat}
@@ -232,7 +242,11 @@ if(sessionStorage.getItem('cp_auth')==='1'){
 
 <div id="appMain" style="display:none">
 <nav class="nav">
-  <div class="nav-brand">Content Planner</div>
+  <div class="nav-brand-wrap">
+    <div class="conn-dot offline" id="connDot" title="Disconnected"></div>
+    <div class="nav-brand">Content Planner</div>
+    <span class="pending-badge" id="pendingBadge">0 pending</span>
+  </div>
   <div class="nav-actions">
     <button class="btn btn-sync btn-sm" id="syncBtn" onclick="manualSync()" title="Pull latest from Google Sheet">Sync</button>
     <span class="sync-status" id="syncStatus"></span>
@@ -298,13 +312,12 @@ if(sessionStorage.getItem('cp_auth')==='1'){
   <div class="settings-container">
     <h2 style="margin-bottom:20px;font-size:20px">Settings</h2>
     <div class="settings-section" id="syncSettingsSection">
-      <h3>Google Sheets Sync</h3>
-      <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">Paste your Apps Script Web App URL to enable team sync.</p>
+      <h3>Sync Status</h3>
       <div id="syncConnectionStatus"></div>
-      <input type="text" class="sync-url-input" id="sheetUrlInput" placeholder="https://script.google.com/macros/s/.../exec" onchange="saveSheetUrl()">
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn btn-sync btn-sm" onclick="syncPull()">Pull from Sheet</button>
         <button class="btn btn-primary btn-sm" onclick="syncPush()">Push to Sheet</button>
+        <button class="btn btn-secondary btn-sm" onclick="flushQueue()">Retry Pending</button>
       </div>
     </div>
     <div class="settings-section"><h3>Statuses</h3><div class="settings-list" id="statusList"></div><div class="settings-add-row"><input type="text" id="newStatusName" placeholder="New status name..."><div class="color-input-wrap"><div class="color-preview" id="newStatusColorPreview" style="background:#ccc"></div><input type="color" id="newStatusColor" value="#cccccc" onchange="document.getElementById('newStatusColorPreview').style.background=this.value"></div><button class="btn btn-primary btn-sm" onclick="addStatus()">Add</button></div></div>
@@ -368,25 +381,42 @@ let modalComments=[];
 const SHEET_URL='https://script.google.com/a/macros/machino.com.my/s/AKfycbynTwytIKMgsy4bUxEKnyIc2SCWf9A-nSSa-gc9Al835TuVLpHNoJdPHouZ7GMyaJPV8w/exec';
 let sheetUrl=SHEET_URL;
 let isSyncing=false;
+let connState='offline'; // 'live','reconnecting','offline'
+let syncQueue=[];        // offline queue: [{action,payload}]
+let consecutiveFails=0;
 
-function getSheetUrl(){
-  const custom=localStorage.getItem('cp_sheet_url');
-  return custom||SHEET_URL;
+function getSheetUrl(){return SHEET_URL}
+
+// ---- Connection Dot ----
+function setConnState(state){
+  connState=state;
+  const dot=document.getElementById('connDot');
+  if(!dot)return;
+  dot.className='conn-dot '+state;
+  dot.title=state==='live'?'Connected — live sync':state==='reconnecting'?'Reconnecting...':'Disconnected';
 }
-function saveSheetUrl(){
-  const v=document.getElementById('sheetUrlInput').value.trim();
-  if(v)localStorage.setItem('cp_sheet_url',v);
-  sheetUrl=v||SHEET_URL;
-  updateSyncUI();
+
+// ---- Pending Badge ----
+function updatePendingBadge(){
+  const badge=document.getElementById('pendingBadge');
+  if(!badge)return;
+  if(syncQueue.length>0){
+    badge.textContent=syncQueue.length+' pending';
+    badge.classList.add('has-pending');
+  } else {
+    badge.classList.remove('has-pending');
+  }
 }
+
+// ---- Sync Status ----
 function updateSyncUI(){
   const el=document.getElementById('syncConnectionStatus');
   if(el){
-    if(sheetUrl)el.innerHTML='<div class="sync-connected">Connected to Google Sheet</div>';
-    else el.innerHTML='<div style="font-size:12px;color:#e17055;margin-bottom:8px">No URL set — sync disabled</div>';
+    if(connState==='live')el.innerHTML='<div class="sync-connected" style="color:#2e8b57">Live — auto-syncing every 3s</div>';
+    else if(connState==='reconnecting')el.innerHTML='<div style="font-size:12px;color:var(--gold);margin-bottom:8px;font-family:-apple-system,sans-serif">Reconnecting...</div>';
+    else el.innerHTML='<div style="font-size:12px;color:#d63031;margin-bottom:8px;font-family:-apple-system,sans-serif">Disconnected — changes queued locally</div>';
+    if(syncQueue.length>0)el.innerHTML+=`<div style="font-size:11px;color:var(--gold);margin-top:4px;font-family:-apple-system,sans-serif">${syncQueue.length} change${syncQueue.length>1?'s':''} pending sync</div>`;
   }
-  const inp=document.getElementById('sheetUrlInput');
-  if(inp)inp.value=sheetUrl;
 }
 function setSyncStatus(msg,isError){
   const el=document.getElementById('syncStatus');
@@ -397,44 +427,45 @@ function setSyncStatus(msg,isError){
 }
 
 function manualSync(){
-  if(!sheetUrl){showToast('No Google Sheet connected — go to Settings to set it up');return}
-  if(isSyncing){showToast('Sync already in progress...');return}
+  if(!sheetUrl){showToast('No sync URL configured');return}
+  if(isSyncing){showToast('Sync in progress...');return}
   syncPull();
+  if(syncQueue.length>0)flushQueue();
 }
 
+// ---- PULL (read from sheet) ----
 async function syncPull(){
   if(!sheetUrl||isSyncing)return;
-  isSyncing=true;setSyncStatus('Pulling...', false);
+  isSyncing=true;setSyncStatus('Pulling...',false);
   try{
     const res=await fetch(sheetUrl);
     const data=await res.json();
     if(data.error)throw new Error(data.error);
     if(data.posts){
-      // Use thumbnail from sheet (compressed base64), fall back to local
       const localThumbs={};
       posts.forEach(p=>{if(p.thumbnail)localThumbs[p.id]=p.thumbnail});
       posts=data.posts.map(p=>({...p,thumbnail:p.thumbnail||localThumbs[p.id]||null}));
     }
-    if(data.config){
-      config=data.config;
-      if(!config.defaultChecklist)config.defaultChecklist=['Raw Footage Ready','Video Edited','Thumbnail Done','Caption Written','Reference Uploaded'];
-    }
+    if(data.config){config=data.config;}
     saveToStorage();rebuildChannelTabs();buildPipelineColumns();populateFormDropdowns();populateFilterDropdowns();renderAll();
     const now=new Date();
-    setSyncStatus(`Synced ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`, false);
-    showToast('Pulled '+posts.length+' posts from Sheet');
+    setSyncStatus(`Synced ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`,false);
+    setConnState('live');consecutiveFails=0;
+    showToast('Pulled '+posts.length+' posts');
   }catch(err){
-    setSyncStatus('Sync failed', true);
+    consecutiveFails++;
+    setConnState(consecutiveFails>=3?'offline':'reconnecting');
+    setSyncStatus('Sync failed',true);
     showToast('Sync error: '+err.message);
   }
-  isSyncing=false;
+  isSyncing=false;updateSyncUI();updatePendingBadge();
 }
 
+// ---- PUSH (full overwrite — config changes only) ----
 async function syncPush(){
   if(!sheetUrl||isSyncing)return;
-  isSyncing=true;setSyncStatus('Pushing...', false);
+  isSyncing=true;setSyncStatus('Pushing...',false);
   try{
-    // Compress thumbnails to tiny previews that fit in sheet cells (< 50K chars)
     const cleanPosts=await Promise.all(posts.map(async p=>{
       const c={...p};
       if(c.thumbnail&&c.thumbnail.startsWith('data:')&&c.thumbnail.length>40000){
@@ -442,61 +473,97 @@ async function syncPush(){
       }
       return c;
     }));
-    // Use no-cors to avoid CORS/redirect issues with Google Apps Script
-    await fetch(sheetUrl,{
-      method:'POST',
-      mode:'no-cors',
-      redirect:'follow',
-      body:JSON.stringify({posts:cleanPosts,config})
-    });
-    // no-cors gives opaque response, so verify with a quick GET
+    await fetch(sheetUrl,{method:'POST',mode:'no-cors',redirect:'follow',body:JSON.stringify({posts:cleanPosts,config})});
     await new Promise(r=>setTimeout(r,1000));
     const check=await fetch(sheetUrl);
     const data=await check.json();
     if(data.error)throw new Error(data.error);
     const now=new Date();
-    setSyncStatus(`Pushed ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`, false);
-    showToast('Pushed '+posts.length+' posts to Sheet');
+    setSyncStatus(`Pushed ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`,false);
+    setConnState('live');consecutiveFails=0;
+    showToast('Pushed '+posts.length+' posts');
   }catch(err){
-    setSyncStatus('Push failed', true);
+    consecutiveFails++;
+    setConnState(consecutiveFails>=3?'offline':'reconnecting');
+    setSyncStatus('Push failed',true);
     showToast('Push error: '+err.message);
   }
-  isSyncing=false;
+  isSyncing=false;updateSyncUI();updatePendingBadge();
 }
 
-// Auto-push after save/delete (debounced)
+// Auto-push after config/settings changes (debounced)
 let pushTimer=null;
 function autoPush(){
   if(!sheetUrl)return;
   clearTimeout(pushTimer);
-  pushTimer=setTimeout(()=>syncPush(),1500);
+  pushTimer=setTimeout(()=>{pushTimer=null;syncPush()},1500);
 }
 
-// Auto-pull every 3 seconds so all team members stay in near real-time sync
+// ---- OFFLINE QUEUE ----
+function enqueue(action,payload){
+  syncQueue.push({action,payload,ts:Date.now()});
+  // Save queue to sessionStorage so it survives page refresh
+  try{sessionStorage.setItem('cp_queue',JSON.stringify(syncQueue))}catch(e){}
+  updatePendingBadge();updateSyncUI();
+}
+function loadQueue(){
+  try{const q=sessionStorage.getItem('cp_queue');if(q)syncQueue=JSON.parse(q)}catch(e){syncQueue=[]}
+  updatePendingBadge();
+}
+
+async function flushQueue(){
+  if(!sheetUrl||syncQueue.length===0)return;
+  const queue=[...syncQueue];
+  let flushed=0;
+  for(const item of queue){
+    try{
+      await fetch(sheetUrl,{method:'POST',mode:'no-cors',redirect:'follow',body:JSON.stringify(item.payload)});
+      syncQueue.shift();flushed++;
+    }catch(err){
+      // Stop flushing on first failure — rest stays queued
+      break;
+    }
+  }
+  try{sessionStorage.setItem('cp_queue',JSON.stringify(syncQueue))}catch(e){}
+  updatePendingBadge();updateSyncUI();
+  if(flushed>0){
+    setConnState('live');consecutiveFails=0;
+    showToast(`Synced ${flushed} pending change${flushed>1?'s':''}`);
+  }
+}
+
+// ---- AUTO-SYNC (pull every 3s + flush queue) ----
 let autoPullTimer=null;
 function startAutoSync(){
   if(autoPullTimer)clearInterval(autoPullTimer);
   autoPullTimer=setInterval(async()=>{
-    // Skip if no sheet URL, already syncing, modal is open, or a push is pending
     const modal=document.getElementById('modalOverlay');
     if(!sheetUrl||isSyncing||(modal&&modal.classList.contains('active'))||pushTimer)return;
     try{
       const res=await fetch(sheetUrl);
       const data=await res.json();
-      if(data.error||!data.posts)return;
-      // Quick fingerprint to skip if nothing changed
+      if(data.error||!data.posts)throw new Error('bad response');
+      // Connection is alive
+      if(connState!=='live'){setConnState('live');consecutiveFails=0;updateSyncUI()}
+      // Flush any pending queue items
+      if(syncQueue.length>0)flushQueue();
+      // Skip UI update if data unchanged
       const remoteKey=data.posts.map(p=>`${p.id}:${p.status}:${p.date}:${(p.caption||'').length}:${p.lastUpdated||''}`).join('|');
       const localKey=posts.map(p=>`${p.id}:${p.status}:${p.date}:${(p.caption||'').length}:${p.lastUpdated||''}`).join('|');
       if(remoteKey===localKey)return;
-      // Merge: keep local thumbnails if remote doesn't have one
       const localThumbs={};
       posts.forEach(p=>{if(p.thumbnail)localThumbs[p.id]=p.thumbnail});
       posts=data.posts.map(p=>({...p,thumbnail:p.thumbnail||localThumbs[p.id]||null}));
-      if(data.config){config=data.config;if(!config.defaultChecklist)config.defaultChecklist=['Raw Footage Ready','Video Edited','Thumbnail Done','Caption Written','Reference Uploaded'];}
+      if(data.config){config=data.config;}
       saveToStorage();rebuildChannelTabs();buildPipelineColumns();populateFormDropdowns();populateFilterDropdowns();renderAll();
       const now=new Date();
       setSyncStatus(`Live · ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`,false);
-    }catch(err){}
+    }catch(err){
+      consecutiveFails++;
+      if(consecutiveFails>=3)setConnState('offline');
+      else if(consecutiveFails>=1)setConnState('reconnecting');
+      updateSyncUI();
+    }
   },3000);
 }
 function stopAutoSync(){if(autoPullTimer){clearInterval(autoPullTimer);autoPullTimer=null;}}
@@ -504,9 +571,8 @@ function stopAutoSync(){if(autoPullTimer){clearInterval(autoPullTimer);autoPullT
 // ============ INIT ============
 document.addEventListener('DOMContentLoaded',()=>{
   sheetUrl=getSheetUrl();
-  loadFromStorage();rebuildChannelTabs();buildPipelineColumns();populateFormDropdowns();populateFilterDropdowns();renderAll();setupThumbDragDrop();setupNavListeners();
-  updateSyncUI();
-  // Auto-pull on load if connected, then start polling
+  loadFromStorage();loadQueue();rebuildChannelTabs();buildPipelineColumns();populateFormDropdowns();populateFilterDropdowns();renderAll();setupThumbDragDrop();setupNavListeners();
+  updateSyncUI();updatePendingBadge();
   if(sheetUrl){setTimeout(()=>syncPull(),500);setTimeout(()=>startAutoSync(),2000);}
 });
 
@@ -670,22 +736,25 @@ function inlineChangeStatus(postId,newStatus){
 // ============ PER-POST SYNC (single row update) ============
 async function syncPost(post){
   if(!sheetUrl)return;
+  const p={...post};
+  if(p.thumbnail&&p.thumbnail.startsWith('data:')&&p.thumbnail.length>40000){
+    p.thumbnail=await resizeImage(p.thumbnail,600);
+  }
+  const payload={action:'updatePost',post:p};
   try{
-    const p={...post};
-    if(p.thumbnail&&p.thumbnail.startsWith('data:')&&p.thumbnail.length>40000){
-      p.thumbnail=await resizeImage(p.thumbnail,600);
-    }
-    await fetch(sheetUrl,{
-      method:'POST',
-      mode:'no-cors',
-      redirect:'follow',
-      body:JSON.stringify({action:'updatePost',post:p})
-    });
+    await fetch(sheetUrl,{method:'POST',mode:'no-cors',redirect:'follow',body:JSON.stringify(payload)});
     const now=new Date();
     setSyncStatus(`Saved · ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`,false);
+    setConnState('live');consecutiveFails=0;
   }catch(err){
-    setSyncStatus('Save failed',true);
+    // Failed — add to offline queue for retry
+    enqueue('updatePost',payload);
+    consecutiveFails++;
+    setConnState(consecutiveFails>=3?'offline':'reconnecting');
+    setSyncStatus('Queued (offline)',true);
+    showToast('Offline — change saved locally, will sync when connected');
   }
+  updateSyncUI();
 }
 
 // ============ CALENDAR ============
@@ -815,10 +884,19 @@ function resizeImage(base64,maxSize){
 function deletePost(){const id=document.getElementById('postId').value;if(id&&confirm('Delete this post?')){posts=posts.filter(p=>p.id!==id);saveToStorage();renderAll();closeModal();syncDeletePost(id)}}
 async function syncDeletePost(postId){
   if(!sheetUrl)return;
+  const payload={action:'deletePost',postId};
   try{
-    await fetch(sheetUrl,{method:'POST',mode:'no-cors',redirect:'follow',body:JSON.stringify({action:'deletePost',postId})});
+    await fetch(sheetUrl,{method:'POST',mode:'no-cors',redirect:'follow',body:JSON.stringify(payload)});
     const now=new Date();setSyncStatus(`Deleted · ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`,false);
-  }catch(err){setSyncStatus('Delete sync failed',true)}
+    setConnState('live');consecutiveFails=0;
+  }catch(err){
+    enqueue('deletePost',payload);
+    consecutiveFails++;
+    setConnState(consecutiveFails>=3?'offline':'reconnecting');
+    setSyncStatus('Queued (offline)',true);
+    showToast('Offline — delete queued, will sync when connected');
+  }
+  updateSyncUI();
 }
 
 // ============ REFERENCE LINKS (multiple) ============
