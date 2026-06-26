@@ -228,15 +228,19 @@ function checkLogin(){
     document.getElementById('loginGate').style.display='none';
     document.getElementById('appMain').style.display='block';
     sessionStorage.setItem('cp_auth','1');
+    sessionStorage.setItem('cp_pin',pass); // used as the write PIN for planner-write
   }else{
     document.getElementById('loginError').style.display='block';
     document.getElementById('loginPass').value='';
   }
 }
 function simpleHash(s){let h=0;for(let i=0;i<s.length;i++){h=((h<<5)-h)+s.charCodeAt(i);h|=0}return btoa(String(h)).slice(0,5)}
-// Auto-unlock if already authed this session
-if(sessionStorage.getItem('cp_auth')==='1'){
+// Auto-unlock only if authed AND we still hold the write PIN this session.
+// (Without the PIN, writes would silently queue — force a clean re-login instead.)
+if(sessionStorage.getItem('cp_auth')==='1'&&sessionStorage.getItem('cp_pin')){
   document.getElementById('loginGate').style.display='none';
+}else{
+  sessionStorage.removeItem('cp_auth');
 }
 </script>
 
@@ -377,15 +381,51 @@ const CHANNEL_COLORS=['#c2185b','#d4a853','#e17055','#7b5ea7','#2e8b57','#e84393
 let posts=[],currentMonth=new Date().getMonth(),currentYear=new Date().getFullYear(),currentThumb=null,activeChannel='ig',activeView='grid',isOverview=false;
 let modalComments=[];
 
-// ============ GOOGLE SHEETS SYNC ============
-const SHEET_URL='https://script.google.com/a/macros/machino.com.my/s/AKfycbynTwytIKMgsy4bUxEKnyIc2SCWf9A-nSSa-gc9Al835TuVLpHNoJdPHouZ7GMyaJPV8w/exec';
-let sheetUrl=SHEET_URL;
+// ============ SUPABASE SYNC ============
+// Reads go direct to PostgREST with the anon key (read-only). Every write goes
+// through the planner-write Edge Function (service-role, PIN-gated). The PIN is
+// the team password captured at login (sessionStorage 'cp_pin').
+const SB_URL='https://fwxnmrtmxfvkztqzqgkf.supabase.co';
+const SB_ANON='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ3eG5tcnRteGZ2a3p0cXpxZ2tmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExNTAzNDQsImV4cCI6MjA5NjcyNjM0NH0.vNjk9r0jg77q1beotcv3mXWtAIZ9r2CI__E2ERP9NeE';
+const FN_BASE=SB_URL+'/functions/v1';
+const SB_HEAD={apikey:SB_ANON,Authorization:'Bearer '+SB_ANON};
 let isSyncing=false;
 let connState='offline'; // 'live','reconnecting','offline'
-let syncQueue=[];        // offline queue: [{action,payload}]
+let syncQueue=[];        // offline queue: [{body,ts}] — bodies for planner-write
 let consecutiveFails=0;
 
-function getSheetUrl(){return SHEET_URL}
+// ---- Field mapping (DB snake_case <-> app camelCase) ----
+function rowToPost(r){
+  return {
+    id:r.id, channel:r.channel||'', type:r.type||'', pillar:r.pillar||'', status:r.status||'',
+    usp:r.usp||'', date:r.date||'', time:r.time||'', caption:r.caption||'', remarks:r.remarks||'',
+    refLinks:Array.isArray(r.ref_links)?r.ref_links:[], refLink:(Array.isArray(r.ref_links)&&r.ref_links[0])||'',
+    editedLink:r.edited_link||'', thumbnail:r.thumbnail||null,
+    comments:Array.isArray(r.comments)?r.comments:[], lastUpdated:r.last_updated||''
+  };
+}
+function postToRow(p){
+  const refs=Array.isArray(p.refLinks)?p.refLinks.filter(l=>l&&l.trim()):(p.refLink?[p.refLink]:[]);
+  return {
+    id:p.id, channel:p.channel||'', type:p.type||'', pillar:p.pillar||'', status:p.status||'',
+    usp:p.usp||'', date:(p.date&&/^\d{4}-\d{2}-\d{2}$/.test(p.date))?p.date:null, time:p.time||'',
+    caption:p.caption||'', remarks:p.remarks||'', ref_links:refs, edited_link:p.editedLink||'',
+    thumbnail:p.thumbnail||null, comments:Array.isArray(p.comments)?p.comments:[],
+    last_updated:p.lastUpdated||new Date().toISOString()
+  };
+}
+
+// ---- Write path (Edge Function). Returns parsed JSON or throws. ----
+async function plannerWrite(body){
+  const pin=sessionStorage.getItem('cp_pin')||'';
+  const res=await fetch(FN_BASE+'/planner-write',{
+    method:'POST',
+    headers:{...SB_HEAD,'Content-Type':'application/json'},
+    body:JSON.stringify({pin,...body})
+  });
+  if(!res.ok){let msg='write '+res.status;try{const j=await res.json();if(j&&j.error)msg=j.error}catch(e){}throw new Error(msg)}
+  return res.json();
+}
 
 // ---- Connection Dot ----
 function setConnState(state){
@@ -412,7 +452,7 @@ function updatePendingBadge(){
 function updateSyncUI(){
   const el=document.getElementById('syncConnectionStatus');
   if(el){
-    if(connState==='live')el.innerHTML='<div class="sync-connected" style="color:#2e8b57">Live — auto-syncing every 3s</div>';
+    if(connState==='live')el.innerHTML='<div class="sync-connected" style="color:#2e8b57">Live — auto-syncing</div>';
     else if(connState==='reconnecting')el.innerHTML='<div style="font-size:12px;color:var(--gold);margin-bottom:8px;font-family:-apple-system,sans-serif">Reconnecting...</div>';
     else el.innerHTML='<div style="font-size:12px;color:#d63031;margin-bottom:8px;font-family:-apple-system,sans-serif">Disconnected — changes queued locally</div>';
     if(syncQueue.length>0)el.innerHTML+=`<div style="font-size:11px;color:var(--gold);margin-top:4px;font-family:-apple-system,sans-serif">${syncQueue.length} change${syncQueue.length>1?'s':''} pending sync</div>`;
@@ -427,26 +467,26 @@ function setSyncStatus(msg,isError){
 }
 
 function manualSync(){
-  if(!sheetUrl){showToast('No sync URL configured');return}
   if(isSyncing){showToast('Sync in progress...');return}
   syncPull();
   if(syncQueue.length>0)flushQueue();
 }
 
-// ---- PULL (read from sheet) ----
+// ---- PULL (read from Supabase via PostgREST) ----
 async function syncPull(){
-  if(!sheetUrl||isSyncing)return;
+  if(isSyncing)return;
   isSyncing=true;setSyncStatus('Pulling...',false);
   try{
-    const res=await fetch(sheetUrl);
-    const data=await res.json();
-    if(data.error)throw new Error(data.error);
-    if(data.posts){
-      const localThumbs={};
-      posts.forEach(p=>{if(p.thumbnail)localThumbs[p.id]=p.thumbnail});
-      posts=data.posts.map(p=>({...p,thumbnail:p.thumbnail||localThumbs[p.id]||null}));
-    }
-    if(data.config){config=data.config;}
+    const [pr,cr]=await Promise.all([
+      fetch(SB_URL+'/rest/v1/content_planner?select=*',{headers:SB_HEAD}),
+      fetch(SB_URL+'/rest/v1/content_planner_config?id=eq.1&select=config',{headers:SB_HEAD})
+    ]);
+    if(!pr.ok)throw new Error('read '+pr.status);
+    const rows=await pr.json();
+    const localThumbs={};
+    posts.forEach(p=>{if(p.thumbnail)localThumbs[p.id]=p.thumbnail});
+    posts=rows.map(rowToPost).map(p=>({...p,thumbnail:p.thumbnail||localThumbs[p.id]||null}));
+    if(cr.ok){const c=await cr.json();if(c&&c[0]&&c[0].config&&Object.keys(c[0].config).length)config=c[0].config;}
     saveToStorage();rebuildChannelTabs();buildPipelineColumns();populateFormDropdowns();populateFilterDropdowns();renderAll();
     const now=new Date();
     setSyncStatus(`Synced ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`,false);
@@ -461,25 +501,36 @@ async function syncPull(){
   isSyncing=false;updateSyncUI();updatePendingBadge();
 }
 
-// ---- PUSH (full overwrite — config changes only) ----
+// ---- SAVE CONFIG (settings changes) ----
+async function saveConfig(){
+  try{
+    await plannerWrite({action:'saveConfig',config});
+    const now=new Date();
+    setSyncStatus(`Config saved · ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`,false);
+    setConnState('live');consecutiveFails=0;
+  }catch(err){
+    enqueue({action:'saveConfig',config});
+    consecutiveFails++;setConnState(consecutiveFails>=3?'offline':'reconnecting');
+    setSyncStatus('Config queued',true);
+  }
+  updateSyncUI();updatePendingBadge();
+}
+
+// ---- PUSH (manual "Push to Sheet": save config + upsert every post) ----
 async function syncPush(){
-  if(!sheetUrl||isSyncing)return;
+  if(isSyncing)return;
   isSyncing=true;setSyncStatus('Pushing...',false);
   try{
-    const cleanPosts=await Promise.all(posts.map(async p=>{
-      const c={...p};
-      if(c.thumbnail&&c.thumbnail.startsWith('data:')&&c.thumbnail.length>40000){
-        c.thumbnail=await resizeImage(c.thumbnail,600);
+    await plannerWrite({action:'saveConfig',config});
+    for(const p of posts){
+      const row=postToRow(p);
+      if(row.thumbnail&&row.thumbnail.startsWith('data:')&&row.thumbnail.length>40000){
+        row.thumbnail=await resizeImage(row.thumbnail,600);
       }
-      return c;
-    }));
-    await fetch(sheetUrl,{method:'POST',mode:'no-cors',redirect:'follow',body:JSON.stringify({posts:cleanPosts,config})});
-    await new Promise(r=>setTimeout(r,1000));
-    const check=await fetch(sheetUrl);
-    const data=await check.json();
-    if(data.error)throw new Error(data.error);
+      await plannerWrite({action:'upsertPost',row});
+    }
     const now=new Date();
-    setSyncStatus(`Pushed ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`,false);
+    setSyncStatus(`Pushed ${posts.length} · ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`,false);
     setConnState('live');consecutiveFails=0;
     showToast('Pushed '+posts.length+' posts');
   }catch(err){
@@ -491,33 +542,34 @@ async function syncPush(){
   isSyncing=false;updateSyncUI();updatePendingBadge();
 }
 
-// Auto-push after config/settings changes (debounced)
+// Auto-push after config/settings changes (debounced) — config only.
 let pushTimer=null;
 function autoPush(){
-  if(!sheetUrl)return;
   clearTimeout(pushTimer);
-  pushTimer=setTimeout(()=>{pushTimer=null;syncPush()},1500);
+  pushTimer=setTimeout(()=>{pushTimer=null;saveConfig()},1200);
 }
 
-// ---- OFFLINE QUEUE ----
-function enqueue(action,payload){
-  syncQueue.push({action,payload,ts:Date.now()});
+// ---- OFFLINE QUEUE (stores planner-write bodies) ----
+function enqueue(body){
+  syncQueue.push({body,ts:Date.now()});
   // Save queue to sessionStorage so it survives page refresh
   try{sessionStorage.setItem('cp_queue',JSON.stringify(syncQueue))}catch(e){}
   updatePendingBadge();updateSyncUI();
 }
 function loadQueue(){
   try{const q=sessionStorage.getItem('cp_queue');if(q)syncQueue=JSON.parse(q)}catch(e){syncQueue=[]}
+  // Drop any stale items from the old Google-Sheets queue format.
+  syncQueue=syncQueue.filter(x=>x&&x.body);
   updatePendingBadge();
 }
 
 async function flushQueue(){
-  if(!sheetUrl||syncQueue.length===0)return;
+  if(syncQueue.length===0)return;
   const queue=[...syncQueue];
   let flushed=0;
   for(const item of queue){
     try{
-      await fetch(sheetUrl,{method:'POST',mode:'no-cors',redirect:'follow',body:JSON.stringify(item.payload)});
+      await plannerWrite(item.body);
       syncQueue.shift();flushed++;
     }catch(err){
       // Stop flushing on first failure — rest stays queued
@@ -532,48 +584,39 @@ async function flushQueue(){
   }
 }
 
-// ---- AUTO-SYNC (pull every 3s + flush queue) ----
+// ---- AUTO-SYNC (light poll every 8s; full pull only when changed) ----
 let autoPullTimer=null;
 function startAutoSync(){
   if(autoPullTimer)clearInterval(autoPullTimer);
   autoPullTimer=setInterval(async()=>{
     const modal=document.getElementById('modalOverlay');
-    if(!sheetUrl||isSyncing||(modal&&modal.classList.contains('active'))||pushTimer)return;
+    if(isSyncing||(modal&&modal.classList.contains('active'))||pushTimer)return;
     try{
-      const res=await fetch(sheetUrl);
-      const data=await res.json();
-      if(data.error||!data.posts)throw new Error('bad response');
-      // Connection is alive
+      // Light fingerprint query — no thumbnails, just change-detection columns.
+      const res=await fetch(SB_URL+'/rest/v1/content_planner?select=id,status,date,caption,last_updated',{headers:SB_HEAD});
+      if(!res.ok)throw new Error('poll '+res.status);
+      const rows=await res.json();
       if(connState!=='live'){setConnState('live');consecutiveFails=0;updateSyncUI()}
-      // Flush any pending queue items
       if(syncQueue.length>0)flushQueue();
-      // Skip UI update if data unchanged
-      const remoteKey=data.posts.map(p=>`${p.id}:${p.status}:${p.date}:${(p.caption||'').length}:${p.lastUpdated||''}`).join('|');
-      const localKey=posts.map(p=>`${p.id}:${p.status}:${p.date}:${(p.caption||'').length}:${p.lastUpdated||''}`).join('|');
+      const remoteKey=rows.map(r=>`${r.id}:${r.status}:${r.date||''}:${(r.caption||'').length}:${r.last_updated||''}`).join('|');
+      const localKey=posts.map(p=>`${p.id}:${p.status}:${p.date||''}:${(p.caption||'').length}:${p.lastUpdated||''}`).join('|');
       if(remoteKey===localKey)return;
-      const localThumbs={};
-      posts.forEach(p=>{if(p.thumbnail)localThumbs[p.id]=p.thumbnail});
-      posts=data.posts.map(p=>({...p,thumbnail:p.thumbnail||localThumbs[p.id]||null}));
-      if(data.config){config=data.config;}
-      saveToStorage();rebuildChannelTabs();buildPipelineColumns();populateFormDropdowns();populateFilterDropdowns();renderAll();
-      const now=new Date();
-      setSyncStatus(`Live · ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`,false);
+      await syncPull();
     }catch(err){
       consecutiveFails++;
       if(consecutiveFails>=3)setConnState('offline');
       else if(consecutiveFails>=1)setConnState('reconnecting');
       updateSyncUI();
     }
-  },3000);
+  },8000);
 }
 function stopAutoSync(){if(autoPullTimer){clearInterval(autoPullTimer);autoPullTimer=null;}}
 
 // ============ INIT ============
 document.addEventListener('DOMContentLoaded',()=>{
-  sheetUrl=getSheetUrl();
   loadFromStorage();loadQueue();rebuildChannelTabs();buildPipelineColumns();populateFormDropdowns();populateFilterDropdowns();renderAll();setupThumbDragDrop();setupNavListeners();
   updateSyncUI();updatePendingBadge();
-  if(sheetUrl){setTimeout(()=>syncPull(),500);setTimeout(()=>startAutoSync(),2000);}
+  setTimeout(()=>syncPull(),500);setTimeout(()=>startAutoSync(),2000);
 });
 
 function setupNavListeners(){document.querySelectorAll('.view-tab').forEach(tab=>{tab.addEventListener('click',()=>{document.querySelectorAll('.view-tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.view').forEach(v=>{if(v.id!=='view-settings')v.classList.remove('active')});tab.classList.add('active');activeView=tab.dataset.view;document.getElementById('view-'+activeView).classList.add('active');document.getElementById('view-settings').classList.remove('active');renderAll()})})}
@@ -735,26 +778,25 @@ function inlineChangeStatus(postId,newStatus){
 
 // ============ PER-POST SYNC (single row update) ============
 async function syncPost(post){
-  if(!sheetUrl)return;
   const p={...post};
   if(p.thumbnail&&p.thumbnail.startsWith('data:')&&p.thumbnail.length>40000){
     p.thumbnail=await resizeImage(p.thumbnail,600);
   }
-  const payload={action:'updatePost',post:p};
+  const body={action:'upsertPost',row:postToRow(p)};
   try{
-    await fetch(sheetUrl,{method:'POST',mode:'no-cors',redirect:'follow',body:JSON.stringify(payload)});
+    await plannerWrite(body);
     const now=new Date();
     setSyncStatus(`Saved · ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`,false);
     setConnState('live');consecutiveFails=0;
   }catch(err){
     // Failed — add to offline queue for retry
-    enqueue('updatePost',payload);
+    enqueue(body);
     consecutiveFails++;
     setConnState(consecutiveFails>=3?'offline':'reconnecting');
     setSyncStatus('Queued (offline)',true);
     showToast('Offline — change saved locally, will sync when connected');
   }
-  updateSyncUI();
+  updateSyncUI();updatePendingBadge();
 }
 
 // ============ CALENDAR ============
@@ -791,7 +833,7 @@ function renderPipeline(){
     </div>`}).join('')});
 }
 let draggedId=null;function dragCard(e,id){draggedId=id;e.dataTransfer.effectAllowed='move'}
-function dropCard(e){e.preventDefault();const col=e.target.closest('.pipeline-column');if(!col||!draggedId)return;const post=posts.find(p=>p.id===draggedId);if(post){post.status=col.dataset.status;saveToStorage();renderAll();autoPush()}draggedId=null}
+function dropCard(e){e.preventDefault();const col=e.target.closest('.pipeline-column');if(!col||!draggedId)return;const post=posts.find(p=>p.id===draggedId);if(post){post.status=col.dataset.status;post.lastUpdated=new Date().toISOString();saveToStorage();renderAll();syncPost(post)}draggedId=null}
 
 // ============ OVERVIEW ============
 function renderOverview(){
@@ -883,20 +925,19 @@ function resizeImage(base64,maxSize){
 }
 function deletePost(){const id=document.getElementById('postId').value;if(id&&confirm('Delete this post?')){posts=posts.filter(p=>p.id!==id);saveToStorage();renderAll();closeModal();syncDeletePost(id)}}
 async function syncDeletePost(postId){
-  if(!sheetUrl)return;
-  const payload={action:'deletePost',postId};
+  const body={action:'deletePost',id:postId};
   try{
-    await fetch(sheetUrl,{method:'POST',mode:'no-cors',redirect:'follow',body:JSON.stringify(payload)});
+    await plannerWrite(body);
     const now=new Date();setSyncStatus(`Deleted · ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`,false);
     setConnState('live');consecutiveFails=0;
   }catch(err){
-    enqueue('deletePost',payload);
+    enqueue(body);
     consecutiveFails++;
     setConnState(consecutiveFails>=3?'offline':'reconnecting');
     setSyncStatus('Queued (offline)',true);
     showToast('Offline — delete queued, will sync when connected');
   }
-  updateSyncUI();
+  updateSyncUI();updatePendingBadge();
 }
 
 // ============ REFERENCE LINKS (multiple) ============
@@ -973,7 +1014,7 @@ function saveAndRefresh(){saveToStorage();buildPipelineColumns();populateFormDro
 
 // ============ EXPORT / IMPORT ============
 function exportData(){const data={posts,config};const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`content-planner-${new Date().toISOString().split('T')[0]}.json`;a.click();URL.revokeObjectURL(a.href)}
-function importData(e){const file=e.target.files[0];if(!file)return;const r=new FileReader();r.onload=ev=>{try{const d=JSON.parse(ev.target.result);if(Array.isArray(d))posts=d;else if(d.posts){posts=d.posts;if(d.config)config=d.config}saveToStorage();rebuildChannelTabs();buildPipelineColumns();populateFormDropdowns();populateFilterDropdowns();renderAll();autoPush();alert('Imported '+posts.length+' posts!')}catch(err){alert('Invalid file')}};r.readAsText(file);e.target.value=''}
+function importData(e){const file=e.target.files[0];if(!file)return;const r=new FileReader();r.onload=ev=>{try{const d=JSON.parse(ev.target.result);if(Array.isArray(d))posts=d;else if(d.posts){posts=d.posts;if(d.config)config=d.config}saveToStorage();rebuildChannelTabs();buildPipelineColumns();populateFormDropdowns();populateFilterDropdowns();renderAll();syncPush();alert('Imported '+posts.length+' posts!')}catch(err){alert('Invalid file')}};r.readAsText(file);e.target.value=''}
 </script>
 </div><!-- /appMain -->
 <script>
